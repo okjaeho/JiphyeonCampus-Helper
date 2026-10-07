@@ -1,9 +1,6 @@
 # Generated distribution archives and local preview captures
 artifacts/
 
-# Local verification notes may contain account-specific observations
-tests/verification.md
-
 node_modules/
 .env
 .env.*

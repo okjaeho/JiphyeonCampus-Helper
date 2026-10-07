@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "집현캠퍼스 헬퍼",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "집현캠퍼스 강의·미완료 활동·공지·자료실 통합, 재생목록과 크기 조절 미니플레이어",
   "permissions": ["storage"],
   "action": {"default_title": "집현캠퍼스 헬퍼"},
