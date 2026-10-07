@@ -123,15 +123,25 @@
     const course = (a,b) => collator.compare(a.course,b.course) || a.week-b.week || a.order-b.order;
     return [...items].sort(mode === 'course' ? course : mode === 'week' ? (a,b)=>a.week-b.week || course(a,b) : mode === 'manual' ? (a,b)=>a.rank-b.rank : (a,b)=>(a.end || Infinity)-(b.end || Infinity) || course(a,b));
   }
+  function durationSeconds(text) {
+    const match=compact(text).match(/^(\d+):([0-5]\d)(?::([0-5]\d))?$/);
+    if(!match)return null;
+    return match[3]===undefined?Number(match[1])*60+Number(match[2]):Number(match[1])*3600+Number(match[2])*60+Number(match[3]);
+  }
+  function minimumConfirmed(record) {
+    return !!record&&record.present===true&&Number.isFinite(record.requiredSeconds)&&record.requiredSeconds>0&&Number.isFinite(record.learnedSeconds)&&record.learnedSeconds>=record.requiredSeconds;
+  }
   function attendance(doc, title) {
     const rows = [...doc.querySelectorAll('table.user_progress_table tr')];
-    const row = rows.find(r => [...r.cells].some(c => compact(c.textContent) === compact(title)));
-    if (!row) return null;
+    const matches=rows.filter(r=>[...r.cells].some(c=>compact(c.textContent)===compact(title)));
+    if(matches.length!==1)return null;
+    const row=matches[0];
     const cells = [...row.cells];
     const index = cells.findIndex(c => compact(c.textContent) === compact(title));
-    return {required:compact(cells[index+1]?.textContent), learned:compact(cells[index+2]?.childNodes[0]?.textContent), present:compact(cells[index+3]?.textContent) === 'O'};
+    const required=compact(cells[index+1]?.textContent),learned=compact(cells[index+2]?.childNodes[0]?.textContent);
+    return {required,learned,requiredSeconds:durationSeconds(required),learnedSeconds:learned==='-'?0:durationSeconds(learned),present:compact(cells[index+3]?.textContent)==='O'};
   }
-  const api = {compact,idOf,courses,lectures,activities,activityDates,sortedActivities,board,newest,movedOrder,eligibility,sorted,attendance};
+  const api = {compact,idOf,courses,lectures,activities,activityDates,sortedActivities,board,newest,movedOrder,eligibility,sorted,attendance,durationSeconds,minimumConfirmed};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else globalThis.JHModel = api;
 })();

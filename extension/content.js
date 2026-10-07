@@ -142,8 +142,13 @@
     shadow.querySelector('.controls').append(shadow.querySelector('.audio'));
     const muteGuard=document.createElement('label');muteGuard.className='mute-guard';
     const muteGuardCheck=document.createElement('input');muteGuardCheck.type='checkbox';muteGuardCheck.checked=prefs.preventMutedPause!==false;
-    muteGuard.append(muteGuardCheck,document.createTextNode('음소거 멈춤 방지'));shadow.querySelector('.controls').after(muteGuard);
+    muteGuard.append(muteGuardCheck,document.createTextNode('음소거 멈춤 방지'));
+    const playbackOptions=document.createElement('div');playbackOptions.className='playback-options';
+    const minimumLabel=document.createElement('label');minimumLabel.className='mute-guard';minimumLabel.title='학교 출석부의 요구시간과 출석·완료 반영을 확인하면 다음 강의로 넘어갑니다.';
+    const minimumCheck=document.createElement('input');minimumCheck.type='checkbox';minimumCheck.checked=prefs.minimumOnly!==false;
+    minimumLabel.append(minimumCheck,document.createTextNode('최소 진도율까지만 듣기'));playbackOptions.append(muteGuard,minimumLabel);shadow.querySelector('.controls').after(playbackOptions);
     muteGuardCheck.onchange=()=>{prefs.preventMutedPause=muteGuardCheck.checked;storage.set(prefs);};
+    minimumCheck.onchange=()=>{prefs.minimumOnly=minimumCheck.checked;if(minimumProbe)minimumProbe.nextAt=0;storage.set(prefs);};
     const sectionTabs=document.createElement('div');sectionTabs.className='section-tabs';sectionTabs.setAttribute('role','tablist');sectionTabs.setAttribute('aria-label','통합 목록');
     for(const [id,label] of [['videos','온라인강의'],['activities','미완료 활동'],['notices','공지'],['resources','자료실']]) {
       const button=document.createElement('button');button.textContent=label;button.dataset.section=id;button.setAttribute('role','tab');button.onclick=()=>{section=id;render();if(feeds[id]&&!feeds[id].loaded&&!feeds[id].busy)loadFeed(id);};sectionTabs.append(button);
@@ -352,9 +357,31 @@
       if(feeds[section])loadFeed(section);
     }
     const send=type=>frame?.contentWindow?.postMessage({jh:true,token,type},location.origin);
+    let minimumProbe=null;
+    const probeCurrent=(probe,active,activeRun)=>minimumProbe===probe&&current?.id===active.id&&run===activeRun&&!finishing&&prefs.minimumOnly!==false&&!popupActive;
+    async function checkMinimum() {
+      const probe=minimumProbe,active=current,activeRun=run;
+      if(!probe||!active||probe.busy||Date.now()<probe.nextAt||!playing||!probeCurrent(probe,active,activeRun))return;
+      probe.busy=true;
+      try {
+        const record=M.attendance(await read(`/report/ubcompletion/progress.php?id=${active.courseId}`),active.title);
+        if(!probeCurrent(probe,active,activeRun))return;
+        // The clock only schedules reads. School records decide whether to advance.
+        if(!record||!Number.isFinite(record.requiredSeconds)||record.requiredSeconds<=0||!Number.isFinite(record.learnedSeconds)){probe.nextAt=Infinity;return;}
+        probe.nextAt=Date.now()+Math.max(15,record.requiredSeconds-record.learnedSeconds+5)*1000;
+        if(!M.minimumConfirmed(record)){probe.failures=0;return;}
+        probe.nextAt=Date.now()+60000;
+        const c=courses.find(c=>c.id===active.courseId);
+        const refreshed=M.lectures(await read(c.url),c,location.origin).find(i=>i.id===active.id);
+        if(!probeCurrent(probe,active,activeRun)||!playing||!refreshed?.completed)return;
+        probe.failures=0;
+        finish();
+      }catch{if(probeCurrent(probe,active,activeRun))probe.nextAt=++probe.failures>=3?Infinity:Date.now()+60000;}
+      finally{probe.busy=false;}
+    }
     function playNext() {
       popupActive=false;
-      current=queue.shift()||null;finishing=false;
+      current=queue.shift()||null;finishing=false;minimumProbe=current?{busy:false,nextAt:0,failures:0}:null;
       if(!current){playing=false;status('재생 완료');$('pause').disabled=true;$('stop').disabled=true;$('refresh').disabled=false;render();return;}
       $('player').style.removeProperty('--video-padding');
       token=crypto.randomUUID();frame=document.createElement('iframe');frame.title='학교 강의 미니플레이어';frame.allow='autoplay; fullscreen';frame.src=current.viewer+'#jh-player='+token;
@@ -368,12 +395,14 @@
         await new Promise(r=>setTimeout(r,delay));if(run!==activeRun||current?.id!==active.id)return;
         try{
           const c=courses.find(c=>c.id===active.courseId);const refreshed=M.lectures(await read(c.url),c,location.origin).find(i=>i.id===active.id);
+          if(run!==activeRun||current?.id!==active.id)return;
           if(!refreshed?.completed)continue;
           const doc=await read(`/report/ubcompletion/progress.php?id=${active.courseId}`);const record=M.attendance(doc,active.title);
+          if(run!==activeRun||current?.id!==active.id)return;
           if(record&&!record.present)continue;
           const original=items.find(i=>i.id===active.id);original.completed=true;selected.delete(active.id);
           frame?.remove();frame=null;playNext();return;
-        }catch(e){status(`진도 확인 실패: ${e.message}`,true);finishing=false;return;}
+        }catch(e){if(run!==activeRun||current?.id!==active.id)return;status(`진도 확인 실패: ${e.message}`,true);finishing=false;return;}
       }
       status('출석 또는 완료 반영을 확인하지 못해 멈췄습니다. 학교 출석부를 확인한 뒤 중지·새로고침해주세요.',true);playing=false;$('pause').disabled=true;finishing=false;
     }
@@ -384,7 +413,7 @@
       if(e.data.type==='ready'){send('play');}
       if(e.data.type==='state'){
         const s=e.data;$('progress').max=s.duration||1;$('progress').value=s.current||0;$('time').textContent=`${time(s.current)} / ${time(s.duration)}`;
-        if(!finishing){playing=!s.paused;pauseIcon(s.paused);status(s.error?'재생 오류':s.waiting?'버퍼링 중':s.paused?'일시정지':'재생 중',!!(s.error||s.waiting||s.paused));}
+        if(!finishing){playing=!s.paused;pauseIcon(s.paused);status(s.error?'재생 오류':s.waiting?'버퍼링 중':s.paused?'일시정지':'재생 중',!!(s.error||s.waiting||s.paused));if(!s.paused&&!s.waiting&&!s.error)checkMinimum();}
       }
       if(e.data.type==='blocked'){run++;finishing=false;status(e.data.message,true);playing=false;pauseIcon(true);}
       if(e.data.type==='ended'&&Number.isFinite(e.data.duration)&&e.data.current>=e.data.duration-1)finish();
