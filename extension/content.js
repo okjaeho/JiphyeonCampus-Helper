@@ -22,15 +22,27 @@
     const videos = new Set();
     const token = location.hash.slice('#jh-player='.length);
     const send = (type,data={}) => { if (managed) parent.postMessage({jh:true,token,type,...data},location.origin); };
-    let locked = false;
+    let locked=false,audioReady=false,tabMuted=false,audioRevision=0,audioClosing=false,audioPromise;
+    const announced=new WeakSet();
+    const savedVolume=()=>Math.max(0,Math.min(1,Number(prefs.volume)||0));
+    function announce(v) {if(audioReady&&!announced.has(v)){announced.add(v);send('ready',{aspect:v.videoWidth&&v.videoHeight?v.videoWidth/v.videoHeight:null});}}
     function audio(v) {
       if (locked) return;
       locked=true;
-      const volume=Math.max(0,Math.min(1,Number(prefs.volume)||0));
+      const wanted=savedVolume();
+      // Never raise a zero-volume video until Chrome confirms its tab is muted.
+      const volume=!audioClosing&&audioReady&&(wanted>0||tabMuted)?wanted||.01:0;
       v.defaultMuted=volume===0;
       if (v.muted !== (volume===0)) v.muted=volume===0;
       if (Math.abs(v.volume-volume)>0.001) v.volume=volume;
       locked=false;
+    }
+    async function syncAudio() {
+      const revision=++audioRevision;audioReady=false;videos.forEach(audio);
+      let result;try{result=await chrome.runtime.sendMessage({type:'jh-audio-set',volume:savedVolume(),preventMutedPause:prefs.preventMutedPause!==false});}catch{}
+      if(revision!==audioRevision||audioClosing)return;
+      tabMuted=result?.ok===true&&result.tabMuted===true;audioReady=true;
+      videos.forEach(v=>{audio(v);announce(v);});
     }
     function attach() {
       for (const v of document.querySelectorAll('video')) {
@@ -46,11 +58,14 @@
           send('state',{paused:v.paused,current:v.currentTime,duration:Number.isFinite(v.duration)?v.duration:0,aspect:v.videoWidth&&v.videoHeight?v.videoWidth/v.videoHeight:null,waiting:event==='waiting',error:event==='error'});
         });
         v.addEventListener('ended',()=>send('ended',{current:v.currentTime,duration:v.duration}));
-        send('ready',{aspect:v.videoWidth&&v.videoHeight?v.videoWidth/v.videoHeight:null});
+        announce(v);
       }
     }
-    storage.get().then(p=>{ prefs=p; videos.forEach(audio); });
-    chrome.storage.onChanged.addListener((changes,area)=>{ if(area==='local'&&changes.jhPrefs) {prefs=changes.jhPrefs.newValue || {volume:0};videos.forEach(audio);} });
+    storage.get().then(p=>{prefs=p;audioPromise=syncAudio();}).catch(()=>{audioPromise=syncAudio();});
+    chrome.storage.onChanged.addListener((changes,area)=>{
+      if(area==='local'&&changes.jhPrefs){const before=savedVolume(),prevent=prefs.preventMutedPause!==false;prefs=changes.jhPrefs.newValue||{volume:0};if(before!==savedVolume()||prevent!==(prefs.preventMutedPause!==false))audioPromise=syncAudio();else videos.forEach(audio);}
+    });
+    window.addEventListener('pagehide',()=>{audioClosing=true;audioRevision++;videos.forEach(audio);chrome.runtime.sendMessage({type:'jh-audio-release'}).catch(()=>{});});
     new MutationObserver(attach).observe(document,{childList:true,subtree:true});
     attach();
     if (!managed) return;
@@ -77,7 +92,7 @@
     window.addEventListener('message',async e=>{
       if(e.origin!==location.origin || e.source!==parent || !e.data?.jh || e.data.token!==token) return;
       const v=[...videos].find(v=>v.isConnected);
-      if(e.data.type==='play' && v) {audio(v);try{ await v.play(); }catch{send('blocked',{message:'미니플레이어의 재생 버튼을 눌러주세요.'});}}
+      if(e.data.type==='play' && v) {if(audioPromise)await audioPromise;audio(v);try{ await v.play(); }catch{send('blocked',{message:'미니플레이어의 재생 버튼을 눌러주세요.'});}}
       if(e.data.type==='pause' && v) v.pause();
       if(e.data.type==='finalize') {
         const close=document.querySelector('.vod_close_button');
@@ -87,7 +102,6 @@
     });
     ready(()=>{
       if(document.querySelector('input[type=password]') || /로그인이 필요/.test(document.body.innerText)) send('blocked',{message:'로그인이 필요합니다.'});
-      send('ready');
     });
   }
 
@@ -126,6 +140,10 @@
     const pauseIcon=paused=>iconButton($('pause'),paused?'play':'pause',paused?'재생':'일시정지');
     pauseIcon(false);iconButton($('stop'),'stop','중지');iconButton($('expand'),'expand','크게 보기');
     shadow.querySelector('.controls').append(shadow.querySelector('.audio'));
+    const muteGuard=document.createElement('label');muteGuard.className='mute-guard';
+    const muteGuardCheck=document.createElement('input');muteGuardCheck.type='checkbox';muteGuardCheck.checked=prefs.preventMutedPause!==false;
+    muteGuard.append(muteGuardCheck,document.createTextNode('음소거 멈춤 방지'));shadow.querySelector('.controls').after(muteGuard);
+    muteGuardCheck.onchange=()=>{prefs.preventMutedPause=muteGuardCheck.checked;storage.set(prefs);};
     const sectionTabs=document.createElement('div');sectionTabs.className='section-tabs';sectionTabs.setAttribute('role','tablist');sectionTabs.setAttribute('aria-label','통합 목록');
     for(const [id,label] of [['videos','온라인강의'],['activities','미완료 활동'],['notices','공지'],['resources','자료실']]) {
       const button=document.createElement('button');button.textContent=label;button.dataset.section=id;button.setAttribute('role','tab');button.onclick=()=>{section=id;render();if(feeds[id]&&!feeds[id].loaded&&!feeds[id].busy)loadFeed(id);};sectionTabs.append(button);
@@ -386,7 +404,7 @@
     $('volume').value=Math.round((prefs.volume||0)*100);$('volumeLabel').textContent=$('volume').value+'%';
     $('volume').oninput=()=>{prefs.volume=Number($('volume').value)/100;$('volumeLabel').textContent=$('volume').value+'%';storage.set(prefs);};
     $('refresh').onclick=scan;
-    $('close').onclick=()=>{run++;send('pause');send('finalize');setTimeout(()=>{window.removeEventListener('message',receive);window.removeEventListener('resize',size);document.title=originalTitle;host.remove();onClose();},500);};
+    $('close').onclick=()=>{run++;send('pause');send('finalize');setTimeout(()=>{window.removeEventListener('message',receive);window.removeEventListener('resize',size);document.title=originalTitle;host.remove();chrome.runtime.sendMessage({type:'jh-audio-release-all'}).catch(()=>{});onClose();},500);};
     render();await scan();
   }
 })();
