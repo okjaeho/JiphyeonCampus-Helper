@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "집현캠퍼스 헬퍼",
+  "version": "0.3.0",
+  "description": "집현캠퍼스 강의·미완료 활동·공지·자료실 통합, 재생목록과 크기 조절 미니플레이어",
+  "permissions": ["storage"],
+  "action": {"default_title": "집현캠퍼스 헬퍼"},
+  "background": {"service_worker": "background.js"},
+  "web_accessible_resources": [{"resources": ["dashboard.css"], "matches": ["https://ecampus.sejong.ac.kr/*"]}],
+  "content_scripts": [{
+    "matches": ["https://ecampus.sejong.ac.kr/*"],
+    "js": ["model.js", "content.js"],
+    "run_at": "document_start",
+    "all_frames": true
+  }]
+}

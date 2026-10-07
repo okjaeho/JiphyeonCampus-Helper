@@ -1,0 +1,1 @@
+{"name":"jiphyeon-study-queue","private":true,"scripts":{"check":"node --check extension/content.js && node --check extension/model.js && node --check extension/background.js && node tests/model.test.js","demo":"node tests/server.js"}}
