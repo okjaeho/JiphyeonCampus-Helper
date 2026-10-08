@@ -43,6 +43,9 @@
     if (!item.start && !item.end) return '기간 미표시';
     return '미완료';
   }
+  function playable(item, now=Date.now()) {
+    return item.completed===true||['미완료','기간 미표시'].includes(eligibility(item,now));
+  }
   function activities(doc, course, base) {
     const seen=new Set();
     return [...doc.querySelectorAll('li.activity:not(.vod) .activityinstance a[href]')].flatMap(a=>{
@@ -141,7 +144,7 @@
     const required=compact(cells[index+1]?.textContent),learned=compact(cells[index+2]?.childNodes[0]?.textContent);
     return {required,learned,requiredSeconds:durationSeconds(required),learnedSeconds:learned==='-'?0:durationSeconds(learned),present:compact(cells[index+3]?.textContent)==='O'};
   }
-  const api = {compact,idOf,courses,lectures,activities,activityDates,sortedActivities,board,newest,movedOrder,eligibility,sorted,attendance,durationSeconds,minimumConfirmed};
+  const api = {compact,idOf,courses,lectures,activities,activityDates,sortedActivities,board,newest,movedOrder,eligibility,playable,sorted,attendance,durationSeconds,minimumConfirmed};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else globalThis.JHModel = api;
 })();

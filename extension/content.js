@@ -144,11 +144,11 @@
     const muteGuardCheck=document.createElement('input');muteGuardCheck.type='checkbox';muteGuardCheck.checked=prefs.preventMutedPause!==false;
     muteGuard.append(muteGuardCheck,document.createTextNode('음소거 멈춤 방지'));
     const playbackOptions=document.createElement('div');playbackOptions.className='playback-options';
-    const minimumLabel=document.createElement('label');minimumLabel.className='mute-guard';minimumLabel.title='학교 출석부의 요구시간과 출석·완료 반영을 확인하면 다음 강의로 넘어갑니다.';
+    const minimumLabel=document.createElement('label');minimumLabel.className='mute-guard';minimumLabel.title='완료한 영상은 건너뛰고, 미완료 영상은 출석·완료 반영을 확인하면 다음 강의로 넘어갑니다.';
     const minimumCheck=document.createElement('input');minimumCheck.type='checkbox';minimumCheck.checked=prefs.minimumOnly!==false;
     minimumLabel.append(minimumCheck,document.createTextNode('최소 진도율까지만 듣기'));playbackOptions.append(muteGuard,minimumLabel);shadow.querySelector('.controls').after(playbackOptions);
     muteGuardCheck.onchange=()=>{prefs.preventMutedPause=muteGuardCheck.checked;storage.set(prefs);};
-    minimumCheck.onchange=()=>{prefs.minimumOnly=minimumCheck.checked;if(minimumProbe)minimumProbe.nextAt=0;storage.set(prefs);};
+    minimumCheck.onchange=()=>{prefs.minimumOnly=minimumCheck.checked;if(minimumProbe)minimumProbe.nextAt=0;storage.set(prefs);if(minimumCheck.checked&&current?.completed===true&&!finishing)finish();};
     const sectionTabs=document.createElement('div');sectionTabs.className='section-tabs';sectionTabs.setAttribute('role','tablist');sectionTabs.setAttribute('aria-label','통합 목록');
     for(const [id,label] of [['videos','온라인강의'],['activities','미완료 활동'],['notices','공지'],['resources','자료실']]) {
       const button=document.createElement('button');button.textContent=label;button.dataset.section=id;button.setAttribute('role','tab');button.onclick=()=>{section=id;render();if(feeds[id]&&!feeds[id].loaded&&!feeds[id].busy)loadFeed(id);};sectionTabs.append(button);
@@ -203,7 +203,7 @@
     attention();
     const message=s=>$('message').textContent=s;
     const time=n=>{n=Math.floor(n||0);return `${Math.floor(n/60).toString().padStart(2,'0')}:${(n%60).toString().padStart(2,'0')}`;};
-    const playable=i=>['미완료','기간 미표시'].includes(M.eligibility(i));
+    const playable=i=>M.playable(i);
     $('filter').append(new Option('기간 없는 미완료','undated'));
     function visible() {const query=$('search').value.trim().toLowerCase();return M.sorted(items,prefs.sort).filter(i=>(!$('course').value||i.courseId===$('course').value)&&(!query||`${i.course} ${i.title}`.toLowerCase().includes(query))&&($('filter').value==='all'||$('filter').value==='done'&&i.completed===true||$('filter').value==='expired'&&M.eligibility(i)==='기간 지남'||$('filter').value==='undated'&&M.eligibility(i)==='기간 미표시'||$('filter').value==='pending'&&M.eligibility(i)==='미완료'));}
     function render() {
@@ -381,8 +381,9 @@
     }
     function playNext() {
       popupActive=false;
+      while(prefs.minimumOnly!==false&&queue[0]?.completed===true)selected.delete(queue.shift().id);
       current=queue.shift()||null;finishing=false;minimumProbe=current?{busy:false,nextAt:0,failures:0}:null;
-      if(!current){playing=false;status('재생 완료');$('pause').disabled=true;$('stop').disabled=true;$('refresh').disabled=false;render();return;}
+      if(!current){frame?.remove();frame=null;playing=false;status('재생 완료');$('pause').disabled=true;$('stop').disabled=true;$('refresh').disabled=false;render();return;}
       $('player').style.removeProperty('--video-padding');
       token=crypto.randomUUID();frame=document.createElement('iframe');frame.title='학교 강의 미니플레이어';frame.allow='autoplay; fullscreen';frame.src=current.viewer+'#jh-player='+token;
       $('player').replaceChildren(frame);$('now').textContent=current.title;$('nowCourse').textContent=current.course;$('pause').disabled=false;$('stop').disabled=false;pauseIcon(false);$('refresh').disabled=true;playing=true;status('학교 플레이어를 여는 중…');render();
@@ -394,12 +395,14 @@
       for(const delay of [2500,5000,10000,15000]) {
         await new Promise(r=>setTimeout(r,delay));if(run!==activeRun||current?.id!==active.id)return;
         try{
-          const c=courses.find(c=>c.id===active.courseId);const refreshed=M.lectures(await read(c.url),c,location.origin).find(i=>i.id===active.id);
-          if(run!==activeRun||current?.id!==active.id)return;
-          if(!refreshed?.completed)continue;
-          const doc=await read(`/report/ubcompletion/progress.php?id=${active.courseId}`);const record=M.attendance(doc,active.title);
-          if(run!==activeRun||current?.id!==active.id)return;
-          if(record&&!record.present)continue;
+          if(active.completed!==true){
+            const c=courses.find(c=>c.id===active.courseId);const refreshed=M.lectures(await read(c.url),c,location.origin).find(i=>i.id===active.id);
+            if(run!==activeRun||current?.id!==active.id)return;
+            if(!refreshed?.completed)continue;
+            const doc=await read(`/report/ubcompletion/progress.php?id=${active.courseId}`);const record=M.attendance(doc,active.title);
+            if(run!==activeRun||current?.id!==active.id)return;
+            if(record&&!record.present)continue;
+          }
           const original=items.find(i=>i.id===active.id);original.completed=true;selected.delete(active.id);
           frame?.remove();frame=null;playNext();return;
         }catch(e){if(run!==activeRun||current?.id!==active.id)return;status(`진도 확인 실패: ${e.message}`,true);finishing=false;return;}
