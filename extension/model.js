@@ -1,5 +1,18 @@
 (() => {
   const compact = s => String(s || '').replace(/\s+/g, ' ').trim();
+  function loginState(doc, base) {
+    if(doc.querySelector('input[type="password"]')||doc.body?.classList.contains('notloggedin'))return false;
+    if(doc.body?.classList.contains('loggedin'))return true;
+    for(const a of doc.querySelectorAll('a[href]')) {
+      try {const u=new URL(a.getAttribute('href'),base);if(u.origin===new URL(base).origin&&u.pathname==='/login/logout.php')return true;}catch{}
+    }
+    return null;
+  }
+  function activityType(item) {
+    const module=item.url?.match(/\/mod\/([^/]+)\/view\.php(?:[?#]|$)/)?.[1];
+    const labels={ubfile:'파일',resource:'파일',assign:'과제',assignment:'과제',quiz:'퀴즈',ubboard:'게시판',forum:'게시판',url:'링크',folder:'폴더',page:'페이지',book:'책',survey:'설문',feedback:'설문',choice:'설문'};
+    return item.file?'파일':labels[module]||compact(item.type)||'기타';
+  }
   function idOf(href, base) {
     try { const u = new URL(href, base); return u.origin === new URL(base).origin && /^\d+$/.test(u.searchParams.get('id') || '') ? u.searchParams.get('id') : null; } catch { return null; }
   }
@@ -86,7 +99,7 @@
     const byWeek=(a,b)=>compareNumber(week(a),week(b));
     const tie=(a,b)=>collator.compare(a.course,b.course)||byWeek(a,b)||(a.order||0)-(b.order||0)||collator.compare(a.title,b.title);
     const byTime=(a,b,key)=>compareNumber(Number.isFinite(a[key])?a[key]:Infinity,Number.isFinite(b[key])?b[key]:Infinity)||tie(a,b);
-    const compare=mode==='deadline'?(a,b)=>byTime(a,b,'end'):mode==='start'?(a,b)=>byTime(a,b,'start'):mode==='weekDesc'?(a,b)=>(a.week>0&&b.week>0?b.week-a.week:byWeek(a,b))||tie(a,b):mode==='course'?tie:mode==='type'?(a,b)=>collator.compare(a.type,b.type)||tie(a,b):mode==='title'?(a,b)=>collator.compare(a.title,b.title)||tie(a,b):(a,b)=>byWeek(a,b)||tie(a,b);
+    const compare=mode==='deadline'?(a,b)=>byTime(a,b,'end'):mode==='start'?(a,b)=>byTime(a,b,'start'):mode==='weekDesc'?(a,b)=>(a.week>0&&b.week>0?b.week-a.week:byWeek(a,b))||tie(a,b):mode==='course'?tie:mode==='type'?(a,b)=>collator.compare(activityType(a),activityType(b))||tie(a,b):mode==='title'?(a,b)=>collator.compare(a.title,b.title)||tie(a,b):(a,b)=>byWeek(a,b)||tie(a,b);
     return [...items].sort(compare);
   }
   function board(doc, source, base) {
@@ -144,7 +157,7 @@
     const required=compact(cells[index+1]?.textContent),learned=compact(cells[index+2]?.childNodes[0]?.textContent);
     return {required,learned,requiredSeconds:durationSeconds(required),learnedSeconds:learned==='-'?0:durationSeconds(learned),present:compact(cells[index+3]?.textContent)==='O'};
   }
-  const api = {compact,idOf,courses,lectures,activities,activityDates,sortedActivities,board,newest,movedOrder,eligibility,playable,sorted,attendance,durationSeconds,minimumConfirmed};
+  const api = {compact,loginState,activityType,idOf,courses,lectures,activities,activityDates,sortedActivities,board,newest,movedOrder,eligibility,playable,sorted,attendance,durationSeconds,minimumConfirmed};
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else globalThis.JHModel = api;
 })();

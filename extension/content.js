@@ -127,6 +127,17 @@
     const brand=document.createElement('div');brand.innerHTML='<div class="site-brand"><img class="school-logo" alt="세종대학교 SEJONG UNIVERSITY"><span class="brand-label">집현캠퍼스 헬퍼</span><a class="brand-link" href="https://ecampus.sejong.ac.kr/login.php" target="_blank" rel="noopener">로그인</a></div>';
     brand.querySelector('img').src=logoUrl||'https://ecampus.sejong.ac.kr/theme/image.php/coursemosv2/theme/1791360952/layout/logo-en';
     shadow.prepend(brand);
+    const loginLink=brand.querySelector('.brand-link');
+    const loginStatus=document.createElement('span');loginStatus.className='brand-link login-status';loginStatus.textContent='로그인됨';loginStatus.hidden=true;loginStatus.setAttribute('role','status');loginLink.after(loginStatus);
+    function showLogin(state) {if(state===null||!host.isConnected)return;loginLink.hidden=state;loginStatus.hidden=!state;}
+    showLogin(M.loginState(document,location.origin));
+    let loginChecking=false,loginCheckedAt=0;
+    async function checkLogin() {
+      if(!host.isConnected||document.hidden||scanBusy||loginChecking||Date.now()-loginCheckedAt<5000)return;
+      loginChecking=true;loginCheckedAt=Date.now();
+      try {const doc=await read('/dashboard.php');if(M.courses(doc,location.origin).length)showLogin(true);}catch{}finally{loginChecking=false;}
+    }
+    window.addEventListener('focus',checkLogin);document.addEventListener('visibilitychange',checkLogin);
     const theme=document.createElement('link');theme.rel='stylesheet';theme.href=chrome.runtime.getURL('dashboard.css');shadow.append(theme);
     shadow.querySelector('style').remove();
     shadow.querySelector('header .eyebrow').remove();
@@ -159,6 +170,19 @@
     for(const [value,label] of [['week','주차순'],['weekDesc','최근 주차순'],['deadline','마감일순'],['start','시작일순'],['course','과목순'],['type','종류순'],['title','제목순']])activitySort.append(new Option(label,value));
     activitySort.value=prefs.activitySort||'week';if(!activitySort.value)activitySort.value='week';activitySort.onchange=()=>{prefs.activitySort=activitySort.value;storage.set(prefs);render();};
     $('sort').after(activitySort);
+    const activityFilters=document.createElement('div');activityFilters.className='activity-filters';activityFilters.setAttribute('role','group');activityFilters.setAttribute('aria-label','활동 종류 필터');activityFilters.hidden=true;
+    shadow.querySelector('main>.toolbar').after(activityFilters);
+    const hiddenActivityTypes=new Set(Array.isArray(prefs.hiddenActivityTypes)?prefs.hiddenActivityTypes:[]);
+    function renderActivityFilters() {
+      activityFilters.hidden=section!=='activities';activityFilters.replaceChildren();if(activityFilters.hidden)return;
+      const counts=new Map();
+      for(const item of activities.filter(i=>i.completed===false&&matches(i))) {const type=M.activityType(item);counts.set(type,(counts.get(type)||0)+1);}
+      const types=[...new Set(activities.filter(i=>i.completed===false).map(M.activityType))].sort((a,b)=>a==='파일'?-1:b==='파일'?1:a==='과제'?-1:b==='과제'?1:a.localeCompare(b,'ko'));
+      for(const type of types) {
+        const button=document.createElement('button');button.type='button';button.dataset.type=type;button.textContent=`${type} ${counts.get(type)||0}`;button.setAttribute('aria-pressed',String(!hiddenActivityTypes.has(type)));
+        button.onclick=()=>{if(hiddenActivityTypes.has(type))hiddenActivityTypes.delete(type);else hiddenActivityTypes.add(type);prefs.hiddenActivityTypes=[...hiddenActivityTypes];storage.set(prefs);render();};activityFilters.append(button);
+      }
+    }
     const more=document.createElement('button');more.id='more';more.className='load-more';more.textContent='더 불러오기';$('list').after(more);
     more.onclick=()=>loadMore(section);
     const matches=i=>{const query=$('search').value.trim().toLowerCase();return (!$('course').value||i.courseId===$('course').value)&&(!query||`${i.course} ${i.title}`.toLowerCase().includes(query));};
@@ -213,6 +237,7 @@
       $('search').placeholder=section==='videos'?'과목 또는 강의 검색':'과목 또는 제목 검색';
       videoTools.hidden=section!=='videos';$('filter').hidden=section!=='videos';$('sort').hidden=section!=='videos';
       activitySort.hidden=section!=='activities';
+      renderActivityFilters();
       $('courseCount').textContent=courses.length;
       $('pendingCount').textContent=items.filter(i=>M.eligibility(i)==='미완료').length;
       $('selectedCount').textContent=selected.size;
@@ -231,7 +256,7 @@
       }
       more.hidden=true;
       if(section!=='videos')renderCollection();
-      if(!$('list').children.length) {$('list').innerHTML='<div class="empty">'+(section==='videos'?'현재 조건에 해당하는 영상이 없습니다.':section==='activities'?'미완료 활동이 없습니다.':feeds[section].busy?'불러오는 중…':feeds[section].error|| (section==='notices'&&!feeds.notices.older?'최근 7일 공지가 없습니다.':'등록된 항목이 없습니다.'))+'</div>';}
+      if(!$('list').children.length) {$('list').innerHTML='<div class="empty">'+(section==='videos'?'현재 조건에 해당하는 영상이 없습니다.':section==='activities'?'현재 조건에 해당하는 미완료 활동이 없습니다.':feeds[section].busy?'불러오는 중…':feeds[section].error|| (section==='notices'&&!feeds.notices.older?'최근 7일 공지가 없습니다.':'등록된 항목이 없습니다.'))+'</div>';}
       $('queue').replaceChildren();
       const playlist=current?queue:M.sorted(items,prefs.sort).filter(i=>selected.has(i.id)&&playable(i));
       for(const [index,i] of playlist.entries()) {
@@ -289,10 +314,11 @@
       const feed=feeds[section];
       let rows=section==='activities'?activities.filter(i=>i.completed===false):section==='resources'?[...activities.filter(i=>i.file),...feed.entries]:feed.entries.filter(i=>feed.older||i.stamp>=Date.now()-7*86400000);
       rows=section==='activities'?M.sortedActivities(rows,activitySort.value):M.newest(rows);
-      const filtered=rows.filter(matches);
+      const filtered=rows.filter(i=>matches(i)&&(section!=='activities'||!hiddenActivityTypes.has(M.activityType(i))));
       for(const i of filtered.slice(0,feed?.limit||filtered.length)) {
         const row=document.createElement('div');row.className='collection-row';
-        const kind=document.createElement('span');kind.className='activity-type'+(i.type==='과제'?' assignment':'');kind.textContent=i.type;
+        const type=section==='activities'?M.activityType(i):i.type;
+        const kind=document.createElement('span');kind.className='activity-type'+(type==='과제'?' assignment':'');kind.textContent=type;
         const details=document.createElement('div');details.className='collection-info';
         const course=document.createElement('div');course.className='course';course.textContent=i.course;
         const link=document.createElement('a');link.className='title';link.href=i.url;link.target='_blank';link.rel='noopener';link.textContent=i.title;
@@ -337,15 +363,16 @@
       const u=new URL(url,location.origin);if(u.origin!==location.origin)throw Error('지원하지 않는 주소입니다.');
       const response=await fetch(u.href,{credentials:'same-origin',cache:'no-store'});
       if(!response.ok)throw Error(`페이지를 불러오지 못했습니다 (${response.status}).`);
-      if(new URL(response.url).pathname.includes('/login'))throw Error('로그인이 만료됐습니다. 학교 사이트에서 다시 로그인해주세요.');
+      if(new URL(response.url).pathname.includes('/login')){showLogin(false);throw Error('로그인이 만료됐습니다. 학교 사이트에서 다시 로그인해주세요.');}
       const doc=new DOMParser().parseFromString(await response.text(),'text/html');
-      if(doc.querySelector('input[type=password]'))throw Error('로그인이 필요합니다.');
+      const session=M.loginState(doc,location.origin);showLogin(session);
+      if(session===false)throw Error('로그인이 필요합니다.');
       return doc;
     }
     async function scan() {
       if(scanBusy||current)return;scanBusy=true;$('refresh').disabled=true;
       try {
-        const home=await read('/dashboard.php');courses=M.courses(home,location.origin);if(!courses.length)throw Error('나의 강의실에서 현재 강좌를 찾지 못했습니다.');
+        const home=await read('/dashboard.php');courses=M.courses(home,location.origin);if(courses.length)showLogin(true);if(!courses.length)throw Error('나의 강의실에서 현재 강좌를 찾지 못했습니다.');
         const found=[],other=[],errors=[];scanVersion++;
         for(const [n,c] of courses.entries()) {message(`강좌 확인 중 ${n+1}/${courses.length} · ${c.title}`);try{const doc=await read(c.url);found.push(...M.lectures(doc,c,location.origin));other.push(...M.activities(doc,c,location.origin));}catch(e){errors.push(`${c.title}: ${e.message}`);}}
         activities=other;
@@ -436,7 +463,7 @@
     $('volume').value=Math.round((prefs.volume||0)*100);$('volumeLabel').textContent=$('volume').value+'%';
     $('volume').oninput=()=>{prefs.volume=Number($('volume').value)/100;$('volumeLabel').textContent=$('volume').value+'%';storage.set(prefs);};
     $('refresh').onclick=scan;
-    $('close').onclick=()=>{run++;send('pause');send('finalize');setTimeout(()=>{window.removeEventListener('message',receive);window.removeEventListener('resize',size);document.title=originalTitle;host.remove();chrome.runtime.sendMessage({type:'jh-audio-release-all'}).catch(()=>{});onClose();},500);};
+    $('close').onclick=()=>{run++;send('pause');send('finalize');window.removeEventListener('focus',checkLogin);document.removeEventListener('visibilitychange',checkLogin);setTimeout(()=>{window.removeEventListener('message',receive);window.removeEventListener('resize',size);document.title=originalTitle;host.remove();chrome.runtime.sendMessage({type:'jh-audio-release-all'}).catch(()=>{});onClose();},500);};
     render();await scan();
   }
 })();
