@@ -6,7 +6,8 @@
     async set(p) { await chrome.storage.local.set({jhPrefs:p}); }
   };
   const ready = fn => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn, {once:true}) : fn();
-  if (isViewer) { setupViewer(); return; }
+  // Only the helper's embedded player owns volume and playback settings.
+  if (isViewer) { if (managed) setupViewer(); return; }
   if (window.top !== window) return;
   ready(async () => {
     const launch = document.createElement('button');
