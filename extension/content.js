@@ -111,7 +111,7 @@
     const M=globalThis.JHModel;
     let prefs=await storage.get();
     delete prefs.muted;
-    let items=[],courses=[],selected=new Set(),queue=[],current=null,playing=false,scanBusy=false,finishing=false,run=0;
+    let items=[],courses=[],selected=new Set(),queue=[],current=null,playing=false,scanBusy=false,finishing=false,skipping=false,run=0;
     let activities=[],section='videos',scanVersion=0;
     const feeds={notices:{entries:[],sources:[],loaded:false,busy:false,older:false,limit:20,error:''},resources:{entries:[],sources:[],loaded:false,busy:false,limit:20,error:''}};
     const host=document.createElement('div');host.id='jh-host';document.body.append(host);
@@ -151,6 +151,9 @@
     function iconButton(button,icon,label) {if(button.dataset.icon===icon&&button.getAttribute('aria-label')===label)return;button.dataset.icon=icon;button.classList.add('icon-button');button.innerHTML=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[icon]}</svg>`;button.setAttribute('aria-label',label);button.title=label;}
     const pauseIcon=paused=>iconButton($('pause'),paused?'play':'pause',paused?'재생':'일시정지');
     pauseIcon(false);iconButton($('stop'),'stop','중지');iconButton($('expand'),'expand','크게 보기');
+    const nextButton=document.createElement('button');nextButton.id='next';nextButton.disabled=true;
+    icons.next='<path d="m5 5 10 7-10 7z" fill="currentColor" stroke="none"/><path d="M18 5v14"/>';
+    iconButton(nextButton,'next','다음 영상');$('pause').after(nextButton);
     shadow.querySelector('.controls').append(shadow.querySelector('.audio'));
     const muteGuard=document.createElement('label');muteGuard.className='mute-guard';
     const muteGuardCheck=document.createElement('input');muteGuardCheck.type='checkbox';muteGuardCheck.checked=prefs.preventMutedPause!==false;
@@ -243,6 +246,7 @@
       $('pendingCount').textContent=items.filter(i=>M.eligibility(i)==='미완료').length;
       $('selectedCount').textContent=selected.size;
       $('start').disabled=!selected.size||!!current;
+      nextButton.disabled=!current||!queue.length||skipping;
       $('list').replaceChildren();
       for(const i of section==='videos'?visible():[]) {
         const row=document.createElement('div');row.className='row'+(current?.id===i.id?' active':'');
@@ -408,7 +412,7 @@
       finally{probe.busy=false;}
     }
     function playNext() {
-      popupActive=false;
+      popupActive=false;skipping=false;
       while(prefs.minimumOnly!==false&&queue[0]?.completed===true)selected.delete(queue.shift().id);
       current=queue.shift()||null;finishing=false;minimumProbe=current?{busy:false,nextAt:0,failures:0}:null;
       if(!current){frame?.remove();frame=null;playing=false;status('재생 완료');$('pause').disabled=true;$('stop').disabled=true;$('refresh').disabled=false;render();return;}
@@ -416,6 +420,17 @@
       token=crypto.randomUUID();frame=document.createElement('iframe');frame.title='학교 강의 미니플레이어';frame.allow='autoplay; fullscreen';frame.src=current.viewer+'#jh-player='+token;
       $('player').replaceChildren(frame);$('now').textContent=current.title;$('nowCourse').textContent=current.course;$('pause').disabled=false;$('stop').disabled=false;pauseIcon(false);$('refresh').disabled=true;playing=true;status('학교 플레이어를 여는 중…');render();
       const expected=token;setTimeout(()=>{if(token===expected&&current&&playerStatus==='학교 플레이어를 여는 중…')status('플레이어를 불러오지 못했습니다. 로그인 또는 사이트의 삽입 제한을 확인해주세요.',true);},15000);
+    }
+    async function skipNext() {
+      if(!current||!queue.length||skipping)return;
+      const active=current,activeRun=++run;
+      skipping=true;finishing=true;minimumProbe=null;playing=false;
+      $('pause').disabled=true;status('다음 영상으로 넘어가는 중…');render();
+      send('pause');send('finalize');
+      // Give the school's normal close handler time to save the watched portion.
+      await new Promise(resolve=>setTimeout(resolve,2500));
+      if(run!==activeRun||current?.id!==active.id)return;
+      selected.delete(active.id);frame?.remove();frame=null;playNext();
     }
     async function finish() {
       if(finishing||!current)return;finishing=true;const active=current;const activeRun=run;
@@ -441,12 +456,12 @@
       if(e.origin!==location.origin||e.source!==frame?.contentWindow||!e.data?.jh||e.data.token!==token||!current)return;
       if(e.data.type==='popup'){popupActive=e.data.visible===true;attention();}
       if(Number.isFinite(e.data.aspect)&&e.data.aspect>.2&&e.data.aspect<5){$('player').style.setProperty('--video-padding',(100/e.data.aspect)+'%');requestAnimationFrame(size);}
-      if(e.data.type==='ready'){send('play');}
+      if(e.data.type==='ready'&&!finishing){send('play');}
       if(e.data.type==='state'){
         const s=e.data;$('progress').max=s.duration||1;$('progress').value=s.current||0;$('time').textContent=`${time(s.current)} / ${time(s.duration)}`;
         if(!finishing){playing=!s.paused;pauseIcon(s.paused);status(s.error?'재생 오류':s.waiting?'버퍼링 중':s.paused?'일시정지':'재생 중',!!(s.error||s.waiting||s.paused));if(!s.paused&&!s.waiting&&!s.error)checkMinimum();}
       }
-      if(e.data.type==='blocked'){run++;finishing=false;status(e.data.message,true);playing=false;pauseIcon(true);}
+      if(e.data.type==='blocked'){run++;if(skipping)$('pause').disabled=false;skipping=false;finishing=false;status(e.data.message,true);playing=false;pauseIcon(true);render();}
       if(e.data.type==='ended'&&Number.isFinite(e.data.duration)&&e.data.current>=e.data.duration-1)finish();
     };
     window.addEventListener('message',receive);
@@ -455,7 +470,8 @@
     $('selectAll').onclick=()=>{visible().filter(playable).forEach(i=>{selected.add(i.id);if(current&&current.id!==i.id&&!queue.some(x=>x.id===i.id))queue.push(i);});render();};$('clear').onclick=()=>{selected=new Set(current?[current.id]:[]);queue=[];render();};
     $('start').onclick=()=>{if(current)return;queue=M.sorted(items,prefs.sort).filter(i=>selected.has(i.id)&&playable(i));if(!queue.length)return;run++;playNext();};
     $('pause').onclick=()=>send(playing?'pause':'play');
-    $('stop').onclick=()=>{run++;send('pause');send('finalize');queue=[];current=null;finishing=false;playing=false;popupActive=false;$('pause').disabled=true;$('stop').disabled=true;$('refresh').disabled=false;status('재생을 중지했습니다. 전체 새로고침으로 저장 상태를 확인하세요.',true);render();};
+    nextButton.onclick=skipNext;
+    $('stop').onclick=()=>{run++;send('pause');send('finalize');queue=[];current=null;finishing=false;skipping=false;playing=false;popupActive=false;$('pause').disabled=true;$('stop').disabled=true;$('refresh').disabled=false;status('재생을 중지했습니다. 전체 새로고침으로 저장 상태를 확인하세요.',true);render();};
     const shrink=document.createElement('button');iconButton(shrink,'shrink','작게 보기');shrink.style.cssText='position:fixed;right:11vw;top:9vh;z-index:11;background:white';shrink.hidden=true;shadow.append(shrink);
     const togglePlayer=large=>{$('player').classList.toggle('large',large);iconButton($('expand'),large?'shrink':'expand',large?'작게 보기':'크게 보기');shrink.hidden=!large;};
     $('expand').onclick=()=>togglePlayer(!$('player').classList.contains('large'));
